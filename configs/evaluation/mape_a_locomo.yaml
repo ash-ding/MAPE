@@ -1,0 +1,25 @@
+strict_config: true
+run_name: paper_locomo_method
+harnesses:
+- workspace/paper/locomo_method/harness
+datasets:
+  locomo:
+    judge_model: gpt-5-mini
+    size:
+      n_conversations: null
+      n_qa: null
+model: qwen3-30b-a3b-instruct-2507
+judge_model: gpt-5-mini
+llm:
+  routes:
+    qwen3-30b-a3b-instruct-2507:
+      api_key: EMPTY
+      base_urls:
+      - http://127.0.0.1:8000/v1
+max_sample_concurrent: 3
+trace:
+  max_value_chars: 20000
+gpu:
+  enabled: false
+contract:
+  compose: true

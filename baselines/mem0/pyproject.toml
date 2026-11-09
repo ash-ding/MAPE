@@ -1,0 +1,41 @@
+# mem0 baseline — standalone uv project (Mem0 LLM-extracted fact memory).
+#
+#   cd baselines/mem0 && uv sync      # -> .venv/ (CPython 3.12 via .python-version)
+#
+# Isolated per-baseline env (uv sync + committed uv.lock for reproducibility).
+# The shared-core block is the closure core/ + datasets/ need — duplicated
+# into every baseline pyproject on purpose (independence over DRY).
+[project]
+name = "mape-baseline-mem0"
+version = "0.0.0"
+description = "Mem0 LLM-extracted fact memory"
+requires-python = ">=3.12"
+dependencies = [
+    # --- shared core (core/ + datasets/) ---
+    "openai==1.107.3",
+    "anthropic",
+    "python-dotenv",
+    "httpx",
+    "PyYAML",
+    "jsonschema",
+    "scipy",
+    "numpy",
+    "rich",
+    "tiktoken",
+    # --- mem0-specific ---
+    # The `mem0` package itself is VENDORED under src/ (byte-identical @ v2.0.17
+    # except src/mem0/__init__.py — see README.md), so mem0ai is NOT a dependency.
+    # What follows are the deps the vendored slice actually imports.
+    "qdrant-client==1.15.1",       # in-process Qdrant collection per user
+    "pydantic",                    # mem0 config models
+    "posthog>=7.14.0",             # memory/telemetry.py — eagerly imported even with
+                                   # MEM0_TELEMETRY=False (which memo.py sets)
+    # openai / httpx are already in the shared-core block above; requests comes in
+    # transitively. NOT included: sqlalchemy, pytz, protobuf, spacy — declared by
+    # upstream mem0ai but not imported by the vendored slice (protobuf arrives via
+    # qdrant-client; spacy only via the optional lemmatization path, which falls
+    # back to the raw text when spaCy is absent).
+]
+
+[tool.uv]
+package = false   # this dir is an app env, not a buildable package

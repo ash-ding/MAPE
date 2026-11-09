@@ -1,0 +1,338 @@
+"""LongMemEval environment — dataset-layer utilities.
+
+LongMemEval-S (longmemeval_s_cleaned.json, ~277 MB, ~48 sessions/sample) over
+500 questions.
+
+Each sample is a single (question, answer) pair with a "haystack" of chat
+sessions to retrieve from. The evolution loop's BaseWorkflow treats one sample as one
+"user" and the single QA as one Phase-2 step.
+
+Train/test split (deterministic, 100/400):
+  * search  — 100 question_ids, stratified by question_type
+                (multi-session 27, temporal-reasoning 27,
+                 knowledge-update 15, single-session-user 14,
+                 single-session-assistant 11, single-session-preference 6)
+  * test    — remaining 400 question_ids
+
+Judging is provided by `core.metric.Judge` (used by BaseWorkflow's default
+`judge()` method).
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import random
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+from core.recorder import Basic_Recorder
+
+
+# ---------------------------------------------------------------------------
+# Data paths
+# ---------------------------------------------------------------------------
+
+_data_env = os.environ.get("LONGMEMEVAL_DATA", "")
+_DATA_DIR: Path = Path(_data_env) if _data_env else Path(__file__).resolve().parent
+
+DATA_PATH: Path = _DATA_DIR / "longmemeval_s_cleaned.json"
+
+# 2:8 split (100 search / 400 test), aligned with LoCoMo: 20% to search on,
+# 80% held out, stratified by question_type.
+SEARCH_SIZE = 100
+SEARCH_SPLIT_SEED = "longmemeval.search.v1"
+
+
+# ---------------------------------------------------------------------------
+# Recorder
+# ---------------------------------------------------------------------------
+
+@dataclass
+class LongMemEvalRecorder(Basic_Recorder):
+    """Records one sample's haystack ingestion + single QA answer.
+
+    init:
+      Phase 1 chunk:     {"sessions": List[session_dict]}
+      Phase 2 retrieve:  {"sessions": List[session_dict], "query": str,
+                          "question_date": str}
+
+    Where each `session_dict` is:
+      {"session_id": str, "date": str,
+       "messages": List[{"role": "user"|"assistant", "content": str}]}
+
+    steps: exactly one entry (LongMemEval has 1 QA per sample).
+      {
+        'query': str,
+        'retrieved_memory': Dict,
+        'predicted': str, 'reference': str,
+        'score': int, 'judge_reason': str,
+        'qa_metadata': {'question_type': str, 'question_date': str,
+                        'answer_session_ids': List[str]},
+        'relevant_sessions': List[session_dict],
+      }
+    """
+
+    init: Dict[str, Any] = field(default_factory=dict)
+    steps: List[Dict[str, Any]] = field(default_factory=list)
+    user_id: str = field(default="")
+    reward: float = field(default=0.0)
+    failure_info: Optional[str] = field(default=None)
+
+    async def log_init(self, sessions: List[Dict]) -> None:
+        """Phase 1 chunk ingest."""
+        async with self._lock:
+            self.init = {"sessions": sessions}
+
+    async def log_step(
+        self,
+        query: str,
+        predicted: str,
+        reference: str,
+        score: int,
+        judge_reason: str = "",
+        qa_metadata: Dict = None,
+        retrieved_memory: Dict = None,
+        relevant_sessions: List[Dict] = None,
+    ) -> None:
+        async with self._lock:
+            self.steps.append(
+                {
+                    "query": query,
+                    "retrieved_memory": retrieved_memory or {},
+                    "predicted": predicted,
+                    "reference": reference,
+                    "score": score,
+                    "judge_reason": judge_reason,
+                    "qa_metadata": qa_metadata or {},
+                    "relevant_sessions": relevant_sessions or [],
+                }
+            )
+
+    async def set_reward(self, reward: float) -> None:
+        async with self._lock:
+            self.reward = reward
+
+
+# ---------------------------------------------------------------------------
+# Lazy data loader
+# ---------------------------------------------------------------------------
+
+_CACHE: Optional[List[Dict]] = None
+
+
+def _load_samples() -> List[Dict]:
+    global _CACHE
+    if _CACHE is None:
+        with open(str(DATA_PATH), encoding="utf-8") as f:
+            _CACHE = json.load(f)
+    return _CACHE
+
+
+# ---------------------------------------------------------------------------
+# Stratified search/test split
+# ---------------------------------------------------------------------------
+
+_SPLIT_CACHE: Optional[Tuple[List[str], List[str]]] = None
+
+
+def _proportional_counts(
+    by_type: Dict[str, List[str]], target: int
+) -> Dict[str, int]:
+    """Split `target` into per-type integer counts proportional to |ids|."""
+    total = sum(len(ids) for ids in by_type.values())
+    raw = {t: len(ids) * target / total for t, ids in by_type.items()}
+    counts = {t: int(raw[t]) for t in by_type}  # floor
+    remainder = target - sum(counts.values())
+    if remainder > 0:
+        # Distribute remainder to types with largest fractional parts
+        fracs = sorted(
+            ((raw[t] - counts[t], t) for t in by_type),
+            key=lambda x: (-x[0], x[1]),  # deterministic tie-break
+        )
+        for _, t in fracs[:remainder]:
+            counts[t] += 1
+    return counts
+
+
+def _compute_split() -> Tuple[List[str], List[str]]:
+    """Returns (search_qids, test_qids). Deterministic, cached."""
+    global _SPLIT_CACHE
+    if _SPLIT_CACHE is not None:
+        return _SPLIT_CACHE
+
+    # Data-isolation manifest (evolution/data_isolation.py binds it into
+    # search-mode containers): use its lists verbatim instead of recomputing —
+    # the stratified recompute over a filtered 300-question file would
+    # otherwise produce a bogus nested 180/120 split. Primary location is the
+    # container-only /staging path (NOT inside the data dir: binding a file to
+    # a path that doesn't pre-exist in a host-bound dir makes Singularity
+    # leave an empty placeholder file ON THE HOST — learned the hard way);
+    # the _DATA_DIR fallback serves tests. Absent / empty / corrupt manifest →
+    # recompute as usual.
+    for manifest_path in (Path("/staging/split_manifest.json"),
+                          _DATA_DIR / "split_manifest.json"):
+        if not manifest_path.is_file():
+            continue
+        try:
+            with open(manifest_path, encoding="utf-8") as f:
+                manifest = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            continue  # unreadable/empty placeholder — fall through to recompute
+        _SPLIT_CACHE = (
+            sorted(manifest.get("search", [])),
+            sorted(manifest.get("test", [])),
+        )
+        return _SPLIT_CACHE
+
+    samples = _load_samples()
+    by_type: Dict[str, List[str]] = {}
+    for s in samples:
+        by_type.setdefault(s["question_type"], []).append(s["question_id"])
+
+    # Deterministic per-type order
+    for t in by_type:
+        by_type[t] = sorted(by_type[t])
+
+    counts = _proportional_counts(by_type, SEARCH_SIZE)
+
+    rng = random.Random(SEARCH_SPLIT_SEED)
+    search_qids: List[str] = []
+    test_qids: List[str] = []
+    for t in sorted(by_type):
+        ids = by_type[t][:]
+        rng.shuffle(ids)
+        search_qids.extend(ids[:counts[t]])
+        test_qids.extend(ids[counts[t]:])
+
+    _SPLIT_CACHE = (sorted(search_qids), sorted(test_qids))
+    return _SPLIT_CACHE
+
+
+def get_task_list(status: str, eval_n_samples: Optional[int], seed: Optional[str] = None) -> List[str]:
+    """Return question_id strings for the requested split, capped at
+    eval_n_samples. None = no cap (whole split: the whole split)."""
+    from core.sampling import shuffle_prefix
+    search_qids, test_qids = _compute_split()
+    pool = search_qids if status == "search" else test_qids
+    return shuffle_prefix(list(pool), eval_n_samples, seed)
+
+
+# ---------------------------------------------------------------------------
+# Per-sample loading
+# ---------------------------------------------------------------------------
+
+def _find_sample(samples: List[Dict], question_id: str) -> Dict:
+    for s in samples:
+        if s.get("question_id") == question_id:
+            return s
+    raise KeyError(f"LongMemEval question_id not found: {question_id}")
+
+
+def _session_key(idx: int) -> str:
+    """Positional session id handed to the memory system (0-based idx)."""
+    return f"session_{idx + 1:03d}"
+
+
+def _gold_session_keys(sample: Dict) -> List[str]:
+    """Translate `answer_session_ids` onto the normalized ids _build_sessions
+    emits, so recorder-side gold lookup keeps working after the rename.
+
+    Recorder-side only: this never reaches the memory system (it lives in
+    qa_metadata, which the workflow does not put into recorder.init).
+    """
+    gold = set(sample.get("answer_session_ids", []) or [])
+    return [
+        _session_key(i)
+        for i, sid in enumerate(sample.get("haystack_session_ids", []))
+        if sid in gold
+    ]
+
+
+def _build_sessions(sample: Dict) -> List[Dict]:
+    """Convert parallel lists into a list of session dicts.
+
+    Strips the two upstream scoring labels that would otherwise leak the
+    answer location to the memory system — see the inline notes below.
+    """
+    out: List[Dict] = []
+    for idx, (sid, date, msgs) in enumerate(zip(
+        sample.get("haystack_session_ids", []),
+        sample.get("haystack_dates", []),
+        sample.get("haystack_sessions", []),
+    )):
+        out.append({
+            # Normalized positional id, NOT the upstream one. Upstream names
+            # every gold session "answer_<hash>" and every distractor
+            # "sharegpt_*" / "ultrachat_*" (948/948 vs 0/22919 across the
+            # file), so passing it through hands the memory system a perfect
+            # gold/distractor classifier. Upstream's own reader never sees it
+            # either — run_generation.py labels sessions positionally
+            # ("### Session 45:"). See _gold_session_keys() for how
+            # answer_session_ids is translated onto these.
+            "session_id": _session_key(idx),
+            "date": date,
+            # Only role/content survive. Upstream tags evidence turns with
+            # `has_answer`; that key is present ONLY inside gold sessions
+            # (10960 messages, 0 in distractors), so its mere PRESENCE is a
+            # perfect classifier too. It is a scoring label — the upstream
+            # README says it exists for "turn-level memory recall accuracy
+            # evaluation" — not model input.
+            "messages": [
+                {"role": m.get("role", ""), "content": m.get("content", "")}
+                for m in (msgs or [])
+                if isinstance(m, dict)
+            ],
+        })
+    return out
+
+
+def load_user_data(
+    user_dir: str,
+    eval_n_qa: Optional[int] = None,
+    *,
+    sample_seed: Optional[str] = None,
+) -> Tuple[List[Dict], Dict, List[Dict]]:
+    """Load one LongMemEval sample.
+
+    Parameters
+    ----------
+    user_dir : str
+        The question_id (e.g., "e47becba"). Named `user_dir` to match the
+        LoCoMo signature consumed by core.workflow.BaseWorkflow.
+    eval_n_qa : Optional[int]
+        Ignored — LongMemEval has 1 QA per sample. Kept for API parity.
+    sample_seed : Optional[str]
+        Unused — LongMemEval has exactly 1 QA per sample, so there is no QA
+        subset to seed. Accepted for hook-uniformity with locomo.
+
+    Returns
+    -------
+    (sessions, user_profile, qa_pairs)
+      - sessions:     List[session_dict]. Each session_dict has session_id,
+                      date, messages.
+      - user_profile: empty dict (API parity).
+      - qa_pairs:     list with exactly one normalized QA dict.
+    """
+    samples = _load_samples()
+    sample = _find_sample(samples, user_dir)
+
+    sessions = _build_sessions(sample)
+
+    qa_pairs = [{
+        "query": sample.get("question", ""),
+        "reference": str(sample.get("answer", "")),
+        "metadata": {
+            "question_type": sample.get("question_type", ""),
+            "question_date": sample.get("question_date", ""),
+            # Normalized to match the session_ids _build_sessions emits.
+            "answer_session_ids": _gold_session_keys(sample),
+        },
+    }]
+    # eval_n_qa is a no-op for LongMemEval (one QA per haystack) but we honour
+    # "0 means empty" to stay predictable.
+    if eval_n_qa is not None and eval_n_qa <= 0:
+        qa_pairs = []
+
+    return sessions, {}, qa_pairs

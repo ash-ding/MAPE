@@ -1,0 +1,217 @@
+# LightMem baseline
+
+[LightMem](https://github.com/zjunlp/LightMem) — a lightweight, compression-first
+lifelong memory (LLMlingua-2 pre-compression → attention topic segmentation → LLM
+metadata/summary extraction → embedding index → offline update) — as a ready-made
+memory system on the 2-hook `MemoClass` contract. Paper:
+[arXiv 2510.18866](https://arxiv.org/abs/2510.18866).
+
+**Provenance**: the `src/lightmem/` subtree is vendored from
+<https://github.com/zjunlp/LightMem> @
+`34410f41173f9107fbe8daf273092f398bfaf85b`. Only the **core text** package is
+vendored — `src/lightmem/{__init__,configs,factory,memory}`, **byte-identical** to
+upstream. The `src/lightmem/memory_toolkits/` subtree (LightMem's OWN vendored
+copies of mem0 / A-mem / LangMem for its internal comparisons) and the multimodal
+`src/em2mem` / `VLM2Vec` trees are NOT vendored — this baseline evaluates
+LightMem's text memory only. Verify the vendored files are unmodified:
+
+    UP=$(mktemp -d) && git clone https://github.com/zjunlp/LightMem "$UP" \
+      && git -C "$UP" checkout 34410f4
+    for sub in __init__.py configs factory memory; do \
+      diff -r "$UP/src/lightmem/$sub" src/lightmem/$sub && echo "$sub: identical"; done
+
+Nothing under `src/` is edited (unlike the simplemem baseline, LightMem's
+top-level `__init__.py` is empty, so no trimming is needed). All integration code
+lives in `memo.py`, never in `src/`. The vendored
+`memory/graph.py` is a broken one-line upstream stub (`class GraphMem:` with no
+body); it is imported only when `graph_mem=True`, which this baseline never sets,
+so it is kept byte-identical and never loaded.
+
+## How it works
+
+LightMem's text pipeline runs untouched, driven exactly as in its own experiment
+scripts (`experiments/{locomo,longmemeval}`):
+
+1. **BUILD** (`build_memory_from_data`) — each ingestion unit becomes a LightMem
+   turn (a `[user, assistant]` message pair with a session-level `time_stamp`),
+   fed one turn at a time to `add_memory(messages, force_segment=is_last,
+   force_extract=is_last)`. Internally: optional **LLMlingua-2 pre-compression**
+   → **topic segmentation** (attention-based, sharing the LLMlingua-2 model) →
+   **LLM metadata + summary extraction** (internal `gpt-4o-mini`) → **HF
+   embedding** → insertion into a per-user **Qdrant** index (`update="offline"`).
+   `force_*` on the last turn flush the buffers so the call's data is fully
+   committed before any retrieval (mirrors the drivers' `is_last_turn`). Additive
+   across build calls.
+2. **Offline update** (config `offline_update`, default **on**) — after the last
+   turn of a build call, `construct_update_queue_all_entries()` +
+   `offline_update_all_entries(0.9)` run the full LoCoMo-paper refinement
+   (per-entry LLM dedup / merge / delete over the current index).
+3. **RETRIEVE** (`retrieve_memory_for_query`) — `LightMemory.retrieve(query,
+   limit)` embeds the query, searches Qdrant, and returns the top-k memories as
+   formatted `"timestamp weekday memory"` strings (exactly how LightMem's own
+   LongMemEval driver retrieves). Read-only.
+
+Retrieved memories are returned as `{"passages": [...]}` and the **shared QA agent
+answers** — as it does for every memo, answering being no hook. This keeps the comparison about *memory* (LightMem's compression +
+offline-refined retrieval), not about LightMem's own answer generator.
+
+## Setup
+
+lightmem is its own standalone uv project (`pyproject.toml` + `.python-version`
++ committed `uv.lock`, pulling in sentence-transformers, llmlingua,
+qdrant-client, transformers, torch, pydantic):
+
+    cd baselines/lightmem && uv sync
+
+This creates `baselines/lightmem/.venv/`. The repo-root
+`.venv/` is dev/test only and cannot run lightmem.
+
+## Usage
+
+    uv run --project baselines/lightmem python -m baselines.eval_harness \
+        --config baselines/config.example.yaml      # harness: lightmem
+
+All seven harness baselines share ONE entrypoint
+([`../eval_harness.py`](../eval_harness.py)) and ONE frame config
+([`../config.example.yaml`](../config.example.yaml)): set `harness: lightmem`,
+choose `arm`, dataset/split/sizing and the shared QA + judge models, and point
+`--config` at your copy. The YAML must list EXACTLY the frame keys — a missing
+key OR an unknown key aborts the run before anything executes; a `null` value
+counts as listed. `--project` is not optional: this baseline's deps live only
+in its own venv.
+
+**Method knobs are not in the config file.** Every lightmem-specific parameter is
+declared once, with its justification, in `CONFIG_DEFAULTS` at the top of
+[`memo.py`](memo.py) (the faithful arm); `UNIFIED_MODEL_KEYS` names the keys
+`arm: unified` writes `unified_models` into. Print them:
+
+    uv run --project baselines/lightmem python -m baselines.eval_harness --describe lightmem
+
+Every run keeps its config as `runs/<run_id>/config.yaml` (copy it to re-run) and
+the fully resolved values in `runs/<run_id>/memo_config.resolved.yaml`.
+To override one for an ablation, add a `memo:` block to your config
+(`memo: {retrieve_k: 5}`) — validated against `CONFIG_DEFAULTS`, so a typo aborts;
+model keys can't be set there (use `arm` / `unified_models`).
+
+LightMem-specific keys worth calling out: `pre_compress` / `topic_segment`
+(default on; `topic_segment` requires `pre_compress` — shared LLMlingua-2
+model); `lightmem_llm_model` (default `gpt-4o-mini`. LightMem
+sends `temperature=0.1`, which the gpt-5 family rejects, but `model_config`
+normalises it away at the SDK boundary, so a gpt-5 model IS runnable). The rest
+(`llmlingua_model`, `llmlingua_device`, `compress_rate`, `messages_use`,
+`extract_threshold`, `extraction_mode`, `manager_max_tokens`,
+`embedding_model`, `embedding_dims`, `embedding_device`, `offline_update`,
+`update_sim_threshold`, `retrieve_limit`, `llm_model`, `judge_model`,
+`size`, `sampling_seed`) are documented inline in
+`../config.example.yaml`.
+
+**Sizing is config-file only** (there is no sizing CLI surface either):
+the REQUIRED `size` block. See `../config.example.yaml`.
+
+## Ingestion mapping (`recorder.init` → LightMem turns)
+
+| Benchmark | init key | one turn per… | user content / time_stamp |
+|---|---|---|---|
+| locomo | `conversation` | conversation utterance | turn text / `parse_locomo_timestamp(session date_time)` (verbatim from `add_locomo.py`) |
+| longmemeval_s | `sessions` | (user, assistant) message pair | user message content / session `date` (LightMem's native LongMemEval mapping) |
+
+Turns are ingested in order; the per-user Qdrant index is instance-scoped
+(`uuid`), so a fresh `MemoClass` per user means no cross-user state.
+
+## Model configuration (two arms)
+
+Every model this baseline touches is a config parameter, so it runs in two arms:
+
+| | faithful arm (`arm: faithful` — `CONFIG_DEFAULTS`) | unified arm (`arm: unified` — example `unified_models`) |
+|---|---|---|
+| internal LLM (`lightmem_llm_model`) | `gpt-4o-mini` — LightMem's own default | `gpt-4.1-mini` |
+| embedder (`embedding_model` + `embedding_dims`) | `all-MiniLM-L6-v2`, local, 384-dim — the paper's | `text-embedding-3-small`, API, 1536-dim |
+| pre-compressor (`llmlingua_model`) | LLMlingua-2, local, ~180M | **unchanged** — no API equivalent |
+
+**The faithful arm is the default**, and it is what the faithfulness table
+below and every number in this README describe. The unified arm puts all seven
+baselines on one LLM and one embedder so the comparison against the main method
+is like-for-like — it is a deliberate deviation from the paper, and its numbers
+must not be quoted as LightMem's published result.
+
+Both arms leave `src/` **byte-identical** — the `diff -r` above still passes.
+
+- **the embedder.** LightMem is the one baseline whose API arm needs no
+  adapter: its vendored `TextEmbedderFactory` already ships
+  `TextEmbedderOpenAI`, so `memo.py` selects `model_name: "openai"` when
+  `embedding_model` names a `text-embedding-*` model. That is a real vendored
+  code path. The shared factory from [`../model_config.py`](../model_config.py)
+  is still installed, to memoize the HF arm's weights across users.
+- **the LLM.** LightMem's memory manager sends `temperature` and `max_tokens`,
+  which the gpt-5 family rejects — so before this, LightMem could not run a
+  gpt-5 model at all. The shim drops the rejected params and renames
+  `max_tokens` → `max_completion_tokens` at the OpenAI-SDK boundary.
+- **the pre-compressor stays local.** LLMlingua-2 is a BERT token classifier
+  scoring each token for retention before write — it produces no vectors and
+  has no API equivalent, so it cannot fold into the one-API-model plan and
+  remains a real, untracked local compute cost in BOTH arms.
+
+`embedding_dims` **must move with the embedder**: it sizes the Qdrant
+collection AND is sent as the API `dimensions` parameter, so a mismatch fails
+hard rather than degrading silently. Changing it invalidates any existing index
+built at the old width.
+
+## Faithfulness boundary
+
+| Category | Items |
+|---|---|
+| Verbatim | whole `src/lightmem/{configs,factory,memory}` (pre-compression, topic segmentation, extraction, offline update, Qdrant backend, `retrieve`); `parse_locomo_timestamp`; per-turn `add_memory(force_segment/force_extract=is_last)` loop; LLMlingua-2 model + `compress_rate=0.6`; `extract_threshold=0.1`; internal `gpt-4o-mini`; `retrieve(limit=20)`; `offline_update_all_entries(0.9)` |
+| Design choices (recorded) | **retrieval** = `LightMemory.retrieve()` (LightMem's own LongMemEval-driver path, uniform across datasets) — NOT the LoCoMo experiment's separate `VectorRetriever`/per-speaker glue; **offline update** = config knob, default on (the LoCoMo-paper full pipeline); **answering** via the shared QA agent |
+| Integration adaptations (not algorithm) | longmemeval (per message pair) ingestion mapping; default extraction prompt (as the LongMemEval driver uses — the LoCoMo-specific `experiments/` prompt is not vendored); the shared embedder factory from [`../model_config.py`](../model_config.py) (see **Model configuration** above — a process-wide cache so the weights load once, not per user; LightMem builds a `SentenceTransformer` inside every `LightMemory`, with no injection point to pass a shared one, so the constructor is memoized); `transformers>=4.36,<5` pinned in `pyproject.toml` (transformers 5.0 removed the automatic sdpa→eager fallback for `output_attentions=True`, so LightMem's topic segmenter — which reads `attentions[8..11]` — gets an empty tuple and raises `IndexError`; verified in-env: 4.57.6 returns 12 layers even with `attn_implementation="sdpa"`, 5.14.1 returns 0, so the last 4.x release is sufficient and the pin costs nothing. Run this baseline through its own env — `uv sync --project baselines/lightmem` — since an unpinned environment fails with that `IndexError` from inside vendored code); LightMem's per-call `print`/INFO logging silenced (stdout redirect + logger pinned to WARNING); Qdrant path scoped per-uuid instance; a failed extraction API call is skipped as upstream intends — the manager returns `usage: None` for it and upstream `process_extraction_results` then crashes on `None.get`, failing the whole user; `memo.py` wraps that function and logs each skip |
+| Cross-user note | `memory/lightmem.py` has module globals `GLOBAL_TOPIC_IDX` / `GLOBAL_LAST_SUMMARY_TIME` that never reset across instances. `GLOBAL_TOPIC_IDX` monotonically grows (topic ids don't restart at 0 per user), but retrieval never filters on `topic_id`, so this is inert for scoring; `GLOBAL_LAST_SUMMARY_TIME` is only touched by `summarize()`, which this baseline never calls |
+
+## Cost / performance profile
+
+- **Build** dominates: per turn, optional LLMlingua-2 compression (local) +
+  segmentation (local) + 1 `gpt-4o-mini` extraction call (when a segment
+  triggers) + a local embedding pass. **Offline update** adds a per-entry
+  `gpt-4o-mini` dedup/update call over the whole index. **Retrieve** is a local
+  embedding + Qdrant search, then the shared `gpt-5-mini` QA + `gpt-5-mini` judge.
+- LightMem's internal `gpt-4o-mini` calls **are** tracked: `memo.py` installs
+  `core.openai_usage`, which captures them at the SDK boundary (no edit under
+  `src/`, so byte-identity holds), so extraction and offline-update cost appears
+  in `token_usage.json` under the `build` phase.
+- The LLMlingua-2 pre-compressor (a BERT model) and the sentence-transformer
+  embedder are local and benefit from a GPU (`llmlingua_device` /
+  `embedding_device`). Both default to `null` = **auto-detect** (cuda if a
+  GPU is visible, else cpu). Pin an explicit device if you need one.
+  The embedder is loaded once per process and shared across users by the shared
+  factory in [`../model_config.py`](../model_config.py).
+- **Neither local model can ever appear in the token numbers** — they are not
+  API calls, so there is no usage object to report. LLMlingua-2 runs one forward
+  pass per ingested text; that compute is real and invisible to any token count.
+  `run_record.json` names both models with their device, and `phase_seconds`
+  is the only cost figure that covers them. A cost comparison against another
+  baseline must say it covers API calls only.
+- LightMem is synchronous, so each hook runs it on a worker thread and up to
+  `max_sample_concurrent` users overlap. The shared local models run one call at
+  a time, so the gain comes from the overlapping LLM calls (see
+  `baselines/concurrency.py`) — the same profile as amem/simplemem.
+
+## Smoke test
+
+This baseline needs its own uv environment (incl. `llmlingua` and
+`qdrant-client`), a GPU and an OpenAI key. To smoke each ingestion branch
+cheaply on the search split:
+
+    uv run --project baselines/lightmem python -m baselines.eval_harness --config smoke_locomo.yaml
+    uv run --project baselines/lightmem python -m baselines.eval_harness --config smoke_longmemeval.yaml
+
+Read `runs/<run_id>/traces/<user>.json` to confirm build → retrieve →
+QA runs, `invalid_users` is empty, and the retrieved `passages` are non-empty
+memory strings in the expected `timestamp weekday memory` format.
+
+## Output
+
+    baselines/lightmem/
+    ├── outputs/<instance_id>/     # per-user Qdrant index (on-disk) — gitignored
+    └── runs/<run_id>/
+        ├── score.json             # {"benchmark_eval_score": {...}, "per_user": {...}, ...}
+        ├── token_usage.json        # per-(model, phase) tokens + call counts (core.tokens)
+        ├── run_record.json         # local models that ran (+device), per-phase wall-clock
+        └── traces/<user_id>.json   # full per-user QA trajectory

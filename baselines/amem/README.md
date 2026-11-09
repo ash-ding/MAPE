@@ -1,0 +1,143 @@
+# A-mem baseline
+
+[A-Mem: Agentic Memory for LLM Agents](https://arxiv.org/pdf/2502.12110) as a
+ready-made memory system on the 2-hook `MemoClass` contract.
+
+**Provenance**: `src/memory_layer.py` is vendored VERBATIM from
+<https://github.com/WujiangXu/A-mem> @
+`0c8039f28fdcc08189a23c07a3437d9d2482f9c2` — the paper-reproduction core
+(NOT `memory_layer_robust.py`, NOT the A-mem-sys package). Below its 8-line
+provenance header the file is byte-identical to upstream:
+
+    tail -n +9 src/memory_layer.py | diff - <(git -C /path/to/A-mem show 0c8039f:memory_layer.py)
+
+## How it works
+
+Every ingestion unit becomes an A-mem note (`AgenticMemorySystem.add_note`):
+an LLM analyzes content into keywords/context/tags, a second LLM call decides
+memory evolution (strengthen links / update neighbors), notes are embedded
+with `all-MiniLM-L6-v2` (sentence-transformers, local), and the store
+consolidates every 100 evolutions. Retrieval rewrites the question into
+keywords (LLM; prompt verbatim from the official eval driver
+`test_advanced.py::generate_query_llm`) and returns the top-k notes + linked
+neighbors as one formatted string in `{"memories": ...}`. The shared QA agent
+answers, as it does for every memo (answering is not a hook; note
+MAPE's locomo QA prompts are themselves ported from the IREM A-mem
+baseline, so the answer side is already A-mem-shaped there).
+
+## Setup
+
+amem has its own `.venv/`, built from its own self-contained `pyproject.toml`
+(sentence-transformers, transformers, torch, nltk, rank_bm25, scikit-learn,
+litellm on top of the shared core deps) with a committed `uv.lock`:
+
+    cd baselines/amem && uv sync
+
+This creates `baselines/amem/.venv/`. The repo-root `.venv/` is
+dev/test only and cannot run amem.
+
+## Usage
+
+    uv run --project baselines/amem python -m baselines.eval_harness \
+        --config baselines/config.example.yaml      # harness: amem
+
+All seven harness baselines share ONE entrypoint
+([`../eval_harness.py`](../eval_harness.py)) and ONE frame config
+([`../config.example.yaml`](../config.example.yaml)): set `harness: amem`,
+choose `arm`, dataset/split/sizing and the shared QA + judge models, and point
+`--config` at your copy. The YAML must list EXACTLY the frame keys — a missing
+key OR an unknown key aborts the run before anything executes; a `null` value
+counts as listed. `--project` is not optional: this baseline's deps live only
+in its own venv.
+
+**Method knobs are not in the config file.** Every amem-specific parameter is
+declared once, with its justification, in `CONFIG_DEFAULTS` at the top of
+[`memo.py`](memo.py) (the faithful arm); `UNIFIED_MODEL_KEYS` names the keys
+`arm: unified` writes `unified_models` into. Print them:
+
+    uv run --project baselines/amem python -m baselines.eval_harness --describe amem
+
+Every run keeps its config as `runs/<run_id>/config.yaml` (copy it to re-run) and
+the fully resolved values in `runs/<run_id>/memo_config.resolved.yaml`.
+To override one for an ablation, add a `memo:` block to your config
+(`memo: {retrieve_k: 5}`) — validated against `CONFIG_DEFAULTS`, so a typo aborts;
+model keys can't be set there (use `arm` / `unified_models`).
+
+Worth calling out: `amem_llm_model` (default `gpt-4o-mini`, A-mem's own
+default) and `amem_embedding_model` (default `all-MiniLM-L6-v2`, the
+paper's local 384-dim index) — see **Model configuration** below;
+`retrieve_k` (default 10, upstream default); `llm_model` / `judge_model`
+(default `gpt-5-mini` — shared QA agent + judge, baseline convention).
+`sampling_seed` behaves as documented inline in `../config.example.yaml`.
+
+**Sizing is config-file only** (there is no sizing CLI surface either): the
+REQUIRED `size` block, in the benchmark's native fields (`n_conversations` /
+`n_qa` for locomo, `n_questions` for longmemeval; a `null` field = the WHOLE
+split for that dimension). Omitting `size` aborts the run (no silent
+whole-split). See `../config.example.yaml` — it documents every key.
+
+## Model configuration (two arms)
+
+Every model this baseline touches is a config parameter, so it runs in two arms:
+
+| | faithful arm (`arm: faithful` — `CONFIG_DEFAULTS`) | unified arm (`arm: unified` — example `unified_models`) |
+|---|---|---|
+| internal LLM (`amem_llm_model`) | `gpt-4o-mini` — A-mem's own default | `gpt-4.1-mini` |
+| embedder (`amem_embedding_model`) | `all-MiniLM-L6-v2`, local, 384-dim — the paper's | `text-embedding-3-small`, API, 1536-dim |
+
+**The faithful arm is the default**, and it is what the faithfulness table
+below and every number in this README describe. The unified arm puts all seven
+baselines on one LLM and one embedder so the comparison against the main method
+is like-for-like — it is a deliberate deviation from the paper, and its numbers
+must not be quoted as A-mem's published result.
+
+Both arms leave `src/` **byte-identical** — the provenance `diff` above still
+passes, because nothing under `src/` is edited. Two boundary levers in
+[`../model_config.py`](../model_config.py) make that possible:
+
+- **the embedder.** A-mem builds its own SentenceTransformer inside
+  `SimpleEmbeddingRetriever` with no injection point, so the shared factory
+  patches that constructor. It memoizes local weights across users (a fresh
+  MemoClass is built per user) and returns an API-backed `.encode()`-compatible
+  adapter for a `text-embedding-*` name.
+- **the LLM.** A-mem's `OpenAIController` hardcodes `temperature=0.7` and
+  `max_tokens=1000`, which the gpt-5 family rejects — so before this, A-mem
+  could not run a gpt-5 model at all. The shim drops the rejected params and
+  renames `max_tokens` → `max_completion_tokens` at the OpenAI-SDK boundary.
+
+A-mem holds its index in a plain numpy array sized from the embeddings, so no
+dimension knob has to move with the embedder.
+
+## Faithfulness boundary
+
+| Category | Items |
+|---|---|
+| Verbatim | whole `src/memory_layer.py`; locomo note unit `"Speaker {X}says : {text}"` + session date (missing-space quirk preserved); keywords-rewrite prompt + JSON schema; `retrieve_k=10`; `evo_threshold=100`; internal gpt-4o-mini (faithful arm) |
+| Integration adaptations (not algorithm) | longmemeval (per message) ingestion mapping — A-mem only defined LoCoMo; answering via the shared QA agent; per-note `print` flood redirected to devnull |
+| Upstream quirks preserved | `find_related_memories_raw` neighbor-cap loop behavior; `"says :"` spacing |
+
+## Cost profile
+
+Build dominates: **2 gpt-4o-mini calls per ingested note** (analyze_content +
+process_memory evolution), plus per query 1 gpt-4o-mini keyword rewrite + 1
+gpt-5-mini QA + 1 gpt-5-mini judge. A-mem's internal gpt-4o-mini calls are now
+MEASURED, not estimated: `memo.py` installs `core.openai_usage`, which
+captures the SDK calls its `LLMController` makes (no edit under `src/`, so the
+README's byte-identity claim still holds). They appear in `token_usage.json`
+under the `build` phase (the keyword rewrite under `retrieve`).
+
+The figures below predate that and remain STRUCTURAL estimates (~1.5k in /
+~0.33k out per note, ±50%) until re-measured on a full run; the gpt-5-mini
+QA/judge side is calibrated from the smoke runs' tracked usage. What still
+cannot be counted is the local **all-MiniLM-L6-v2** embedder — not an API
+call, so no usage object exists; `run_record.json` names it with its device,
+and `phase_seconds` is the only cost figure that covers it.
+
+Within one sample the build is **serial** (A-mem is synchronous: one note at a
+time), and `consolidate_memories` re-embeds the whole accumulated corpus every
+100 evolutions (≈ O(n²) local MiniLM work), so per-note wall-clock GROWS with
+corpus size (~3 s/note at ~500 notes, more beyond). Across samples, the hooks
+run A-mem on worker threads, so up to `max_sample_concurrent` (default 3)
+samples build at once; the shared MiniLM model encodes one call at a time
+(see `baselines/concurrency.py`).
+

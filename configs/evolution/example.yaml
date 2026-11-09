@@ -1,0 +1,53 @@
+# Copy this example and edit model routes, run_name and dataset settings.
+# See docs/reproduction.md for preparation and execution commands.
+strict_config: true
+run_name: my_first_search
+steps: 5
+smoke_test: false
+model: gpt-4.1-mini
+judge_model: gpt-5-mini
+llm:
+  routes: {}
+metrics:
+- accuracy
+max_sample_concurrent: 3
+proposer:
+  model: claude-opus-4-8
+  effort: xhigh
+  disallowed_tools:
+  - mcp__*
+  timeout_s: 2700
+propose:
+  k_per_step: 2
+sanity:
+  enabled: true
+  max_retries: 2
+seed:
+  enabled: false
+  sources:
+  - no_memory
+  arm: unified
+  unified_models:
+    llm: gpt-4.1-mini
+    embedding: text-embedding-3-small
+analyst:
+  enabled: false
+  model: claude-opus-4-8
+  effort: xhigh
+  timeout_s: 1800
+  include_seeds: true
+trace:
+  max_value_chars: 20000
+gpu:
+  enabled: false
+adopt_orphans: true
+contract:
+  compose: true
+datasets:
+  locomo:
+    size:                 # the evaluation each candidate gets (null = the whole search split)
+      n_conversations: 2
+      n_qa: 20
+    sanity_check:         # the quick pre-evaluation pass; optional, these are the defaults
+      n_conversations: 1
+      n_qa: 3

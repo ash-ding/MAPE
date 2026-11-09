@@ -1,0 +1,21 @@
+cff-version: 1.2.0
+message: "If you use MAPE, please cite the accompanying paper."
+title: "Discovering Effective Agent Memory Designs through Program Evolution"
+type: software
+authors:
+  - family-names: Ding
+    given-names: Xinheng
+  - family-names: Cheshmi
+    given-names: Seyyed Saeid
+  - family-names: Zhang
+    given-names: Ziyang
+  - family-names: Chen
+    given-names: Tairan
+  - family-names: Xie
+    given-names: Wenya
+  - family-names: Hou
+    given-names: Yu
+  - family-names: Zhang
+    given-names: Rui
+  - family-names: Liu
+    given-names: Zirui

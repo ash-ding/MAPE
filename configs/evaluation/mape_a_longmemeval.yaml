@@ -1,0 +1,24 @@
+strict_config: true
+run_name: paper_longmemeval_method
+harnesses:
+- workspace/paper/longmemeval_method/harness
+datasets:
+  longmemeval_s:
+    judge_model: gpt-5-mini
+    size:
+      n_questions: null
+model: qwen3-30b-a3b-instruct-2507
+judge_model: gpt-5-mini
+llm:
+  routes:
+    qwen3-30b-a3b-instruct-2507:
+      api_key: EMPTY
+      base_urls:
+      - http://127.0.0.1:8000/v1
+max_sample_concurrent: 12
+trace:
+  max_value_chars: 20000
+gpu:
+  enabled: false
+contract:
+  compose: true

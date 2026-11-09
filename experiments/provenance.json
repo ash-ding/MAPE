@@ -1,0 +1,173 @@
+{
+  "note": "Relocated source; import/package paths updated and internal names changed to MAPE naming (comments, module file name mape_a.py, MAPE_ABL_CACHE). No memory algorithm or prompt content changes. compose_memory_context signature reduced to (recorder, retrieved); the query and question_date are read from recorder.init instead of the dropped arguments, with the same fallbacks. An unused import was removed from programs/mape_a/memo.py.",
+  "files": [
+    {
+      "path": "experiments/ablation/locomo/full/ablation_lme.py",
+      "source_commit": "3abe26b",
+      "source_path": "case_study/ablations/locomo/full/ablation_lme.py",
+      "source_sha256": "75018287da42fe796d5c3c48d0572f2750efcd522d2cd29b234b64aadc567326",
+      "sha256": "e51fced0a99d7a0612f7ea113ae4bf73db4b707526aaa651bb6c240a5cb8ceb8"
+    },
+    {
+      "path": "experiments/ablation/locomo/full/memo.py",
+      "source_commit": "3abe26b",
+      "source_path": "case_study/ablations/locomo/full/memo.py",
+      "source_sha256": "6b23555551054cfada8f1caa0b015a3055b0cedc8b98baab8660a9063882360b",
+      "sha256": "3a277ea2843d6943029c27cf1f2f5b1319e590743a9a9e3b850dc8bb698b0a8a"
+    },
+    {
+      "path": "experiments/ablation/locomo/noraw/ablation_lme.py",
+      "source_commit": "3abe26b",
+      "source_path": "case_study/ablations/locomo/noraw/ablation_lme.py",
+      "source_sha256": "75018287da42fe796d5c3c48d0572f2750efcd522d2cd29b234b64aadc567326",
+      "sha256": "e51fced0a99d7a0612f7ea113ae4bf73db4b707526aaa651bb6c240a5cb8ceb8"
+    },
+    {
+      "path": "experiments/ablation/locomo/noraw/memo.py",
+      "source_commit": "3abe26b",
+      "source_path": "case_study/ablations/locomo/noraw/memo.py",
+      "source_sha256": "6b23555551054cfada8f1caa0b015a3055b0cedc8b98baab8660a9063882360b",
+      "sha256": "3a277ea2843d6943029c27cf1f2f5b1319e590743a9a9e3b850dc8bb698b0a8a"
+    },
+    {
+      "path": "experiments/ablation/locomo/noraw_nocompose/ablation_lme.py",
+      "source_commit": "3abe26b",
+      "source_path": "case_study/ablations/locomo/noraw_nocompose/ablation_lme.py",
+      "source_sha256": "75018287da42fe796d5c3c48d0572f2750efcd522d2cd29b234b64aadc567326",
+      "sha256": "e51fced0a99d7a0612f7ea113ae4bf73db4b707526aaa651bb6c240a5cb8ceb8"
+    },
+    {
+      "path": "experiments/ablation/locomo/noraw_nocompose/memo.py",
+      "source_commit": "3abe26b",
+      "source_path": "case_study/ablations/locomo/noraw_nocompose/memo.py",
+      "source_sha256": "6b23555551054cfada8f1caa0b015a3055b0cedc8b98baab8660a9063882360b",
+      "sha256": "3a277ea2843d6943029c27cf1f2f5b1319e590743a9a9e3b850dc8bb698b0a8a"
+    },
+    {
+      "path": "experiments/ablation/longmemeval/full/memo.py",
+      "source_commit": "3abe26b",
+      "source_path": "case_study/ablations/longmemeval/full/memo.py",
+      "source_sha256": "6b54c67acae5d7e83c4ac54d8823ec26ffc2e39ce4f7be6d4a8cc425cee57024",
+      "sha256": "35cfa40d4dfcc5abb04224048366a07de4888fce596e7346ad15a09a94a5c69b"
+    },
+    {
+      "path": "experiments/ablation/longmemeval/noraw/memo.py",
+      "source_commit": "3abe26b",
+      "source_path": "case_study/ablations/longmemeval/noraw/memo.py",
+      "source_sha256": "e900d375200f5c191af5df5911ef2335a83ed81e788746edb3bd5dacaee0d36c",
+      "sha256": "f20fc212b603ace264a343743ee4f47c1b31826d0ac82d94a0c7d56d1f5e0db5"
+    },
+    {
+      "path": "experiments/ablation/longmemeval/noraw_nocompose/memo.py",
+      "source_commit": "3abe26b",
+      "source_path": "case_study/ablations/longmemeval/noraw_nocompose/memo.py",
+      "source_sha256": "75018287da42fe796d5c3c48d0572f2750efcd522d2cd29b234b64aadc567326",
+      "sha256": "e51fced0a99d7a0612f7ea113ae4bf73db4b707526aaa651bb6c240a5cb8ceb8"
+    },
+    {
+      "path": "experiments/ablation/replay.py",
+      "source_commit": "3abe26b",
+      "source_path": "case_study/imported/heldout_locomo_qwen_a20_7723a2_nocompose/harness/memo.py",
+      "source_sha256": "06cbee2d07461a188c7c4e3964714d710db2b3660fd7f1fc1258822c295f042c",
+      "sha256": "8ec9ae5b4e03452f86aee84e080aed61938c95124873a0b05f67df286c323dc8"
+    },
+    {
+      "path": "experiments/transplantation/adapters/amem.py",
+      "source_commit": "3abe26b",
+      "source_path": "case_study/imported/heldout_lme_qwen_transplant_amem/harness/adapters.py",
+      "source_sha256": "e60f1cddcb7d25a6eb6709084a131b6ee63dfcb63c7df98c518566a2fcdf94ca",
+      "sha256": "0fef26d5c9da4afa04979f48169589523fdc345914972d9c630f2950fd8b7fe4"
+    },
+    {
+      "path": "experiments/transplantation/memo.py",
+      "source_commit": "3abe26b",
+      "source_path": "case_study/imported/heldout_lme_qwen_transplant_zep/harness/memo.py",
+      "source_sha256": "a5854cfcfcc5cd338dc6cc930ca4fbfe77e26cff32e94447d917e5753493c85a",
+      "sha256": "69d0c67a37c4a23af317fb953c8071c3374919f13bb5d4a487db9ee41ea28413"
+    },
+    {
+      "path": "experiments/transplantation/adapters/lightmem.py",
+      "source_commit": "3abe26b",
+      "source_path": "case_study/imported/heldout_lme_qwen_transplant_lightmem/harness/adapters.py",
+      "source_sha256": "e60f1cddcb7d25a6eb6709084a131b6ee63dfcb63c7df98c518566a2fcdf94ca",
+      "sha256": "0fef26d5c9da4afa04979f48169589523fdc345914972d9c630f2950fd8b7fe4"
+    },
+    {
+      "path": "experiments/transplantation/adapters/mem0.py",
+      "source_commit": "3abe26b",
+      "source_path": "case_study/imported/heldout_lme_qwen_transplant_mem0/harness/adapters.py",
+      "source_sha256": "eeadd39d3442ea054a9fa591d9161639da0785f650b8dd1286c4a3d38faa0b17",
+      "sha256": "78073e0d933adea901d296d82c5937ff27eb7dab4ef4fec025c5544a74f50999"
+    },
+    {
+      "path": "experiments/transplantation/adapters/simplemem.py",
+      "source_commit": "3abe26b",
+      "source_path": "case_study/imported/heldout_lme_qwen_transplant_simplemem/harness/adapters.py",
+      "source_sha256": "e60f1cddcb7d25a6eb6709084a131b6ee63dfcb63c7df98c518566a2fcdf94ca",
+      "sha256": "0fef26d5c9da4afa04979f48169589523fdc345914972d9c630f2950fd8b7fe4"
+    },
+    {
+      "path": "experiments/transplantation/adapters/zep.py",
+      "source_commit": "3abe26b",
+      "source_path": "case_study/imported/heldout_lme_qwen_transplant_zep/harness/adapters.py",
+      "source_sha256": "eeadd39d3442ea054a9fa591d9161639da0785f650b8dd1286c4a3d38faa0b17",
+      "sha256": "78073e0d933adea901d296d82c5937ff27eb7dab4ef4fec025c5544a74f50999"
+    },
+    {
+      "path": "programs/mape_a/adapters/locomo.py",
+      "source_commit": "3abe26b",
+      "source_path": "case_study/programs/locomo/locomo_adapter.py",
+      "source_sha256": "d99dc672b2e35870fe162394c89ac2a98c01a5b14154b3d4e4c780dc7b293a2e",
+      "sha256": "7630b49cd9e772fbbcb47076d161f090ca26644ae1f6a4d2f91db4fedb2bc925"
+    },
+    {
+      "path": "experiments/transfer/locomo.py",
+      "source_commit": "3abe26b",
+      "source_path": "case_study/programs/locomo/memo.py",
+      "source_sha256": "e47331f8993a7fdf0aeec0a7ed78f8146569a40dd5b46386accf84b77c002ea8",
+      "sha256": "e47331f8993a7fdf0aeec0a7ed78f8146569a40dd5b46386accf84b77c002ea8"
+    },
+    {
+      "path": "programs/mape_a/memo.py",
+      "source_commit": "3abe26b",
+      "source_path": "case_study/programs/longmemeval/memo.py",
+      "source_sha256": "450a555c99f95831e6559a95de96dbdd8b2a9e86b6771ce83864e92a53e7145c",
+      "sha256": "6a156d61d297e5a80cf9e884eb5eac2138664d90497c1f35ba72e74ef114eeb6"
+    },
+    {
+      "path": "programs/mape_a/src/aggregate.py",
+      "source_commit": "3abe26b",
+      "source_path": "case_study/programs/longmemeval/src/aggregate.py",
+      "source_sha256": "5ebcdf8f525276a135734446809a8ccd698d97ad2e7e1558be517bf4d73e95c5",
+      "sha256": "fd0b821ae63defc61b7dcdeb683451a9c73ed284a49ca7e136fcaee72d969787"
+    },
+    {
+      "path": "programs/mape_a/src/notes.py",
+      "source_commit": "3abe26b",
+      "source_path": "case_study/programs/longmemeval/src/notes.py",
+      "source_sha256": "134c8396c6eeaf7ba06f3e8866b9d4ed653f9c0f559a92d18dde68c3750cb179",
+      "sha256": "377baa73263b343b23fb0e1df50cc4eab6cdeba138809ee28cd74e4db6b0990e"
+    },
+    {
+      "path": "programs/mape_a/src/reason.py",
+      "source_commit": "3abe26b",
+      "source_path": "case_study/programs/longmemeval/src/reason.py",
+      "source_sha256": "75ff32395f2fd87c29a5c80561f0dc5df37c81b713b7d6e50a28c738048bf772",
+      "sha256": "22c121d73e36a5ecd9329ecd6cac7c347854bd003f45eb904a658507e7f25672"
+    },
+    {
+      "path": "programs/mape_a/src/retrieval.py",
+      "source_commit": "3abe26b",
+      "source_path": "case_study/programs/longmemeval/src/retrieval.py",
+      "source_sha256": "89ccb3189381e12519235fee2394f9b228a7c35fddc647b447c9fb78a5ed493b",
+      "sha256": "89ccb3189381e12519235fee2394f9b228a7c35fddc647b447c9fb78a5ed493b"
+    },
+    {
+      "path": "programs/mape_a/src/scaffold.py",
+      "source_commit": "3abe26b",
+      "source_path": "case_study/programs/longmemeval/src/scaffold.py",
+      "source_sha256": "2a7618582556f8c0fba43b08029c7531fb4a93ef329510e9144226b6ad636cc5",
+      "sha256": "2a7618582556f8c0fba43b08029c7531fb4a93ef329510e9144226b6ad636cc5"
+    }
+  ]
+}

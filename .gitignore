@@ -1,0 +1,26 @@
+# Environments and secrets
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+.claude/
+# Generated files
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.cache/
+workspace/
+packaged/
+evolution/logs/
+*.sif
+# Downloaded benchmark data
+benchmarks/locomo/locomo10.json
+benchmarks/longmemeval/*.json
+# Baseline run artifacts
+baselines/*/runs/
+baselines/*/results/
+baselines/*/outputs/
+baselines/*/logs/
+baselines/*/smoke_*.yaml
+scripts/vllm/run/

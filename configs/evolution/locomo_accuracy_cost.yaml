@@ -1,0 +1,54 @@
+adopt_orphans: true
+analyst:
+  effort: xhigh
+  enabled: true
+  include_seeds: true
+  model: claude-opus-4-8
+  timeout_s: 1800
+contract:
+  compose: true
+datasets:
+  locomo:
+    judge_model: gpt-5-mini
+    sanity_check:
+      n_conversations: 1
+      n_qa: 3
+    size:
+      n_conversations: 2
+      n_qa: null
+gpu:
+  enabled: true
+judge_model: gpt-5-mini
+llm:
+  routes: {}
+max_sample_concurrent: 3
+metrics:
+- accuracy
+- efficiency
+model: gpt-4.1-mini
+propose:
+  k_per_step: 1
+proposer:
+  disallowed_tools:
+  - mcp__*
+  effort: xhigh
+  model: claude-opus-4-8
+  timeout_s: 2700
+run_name: locomo_main_l3
+sanity:
+  enabled: true
+  max_retries: 2
+seed:
+  arm: unified
+  enabled: true
+  sources:
+  - icl
+  - no_memory
+  unified_models:
+    embedding: text-embedding-3-small
+    llm: gpt-4.1-mini
+smoke_test: false
+steps: 20
+strict_config: true
+trace:
+  max_value_chars: 20000

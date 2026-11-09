@@ -1,0 +1,50 @@
+# rag baseline — standalone uv project (RAG over raw messages, as in LightMem's toolkit).
+#
+#   cd baselines/rag && uv sync      # -> .venv/ (CPython 3.12 via .python-version)
+#
+# Isolated per-baseline env (uv sync + committed uv.lock for reproducibility).
+# The shared-core block is the closure core/ + datasets/ need — duplicated
+# into every baseline pyproject on purpose (independence over DRY).
+[project]
+name = "mape-baseline-rag"
+version = "0.0.0"
+description = "RAG over raw messages (LightMem's NaiveRAG baseline)"
+requires-python = ">=3.12"
+dependencies = [
+    # --- shared core (core/ + datasets/) ---
+    "openai==1.107.3",
+    "anthropic",
+    "python-dotenv",
+    "httpx",
+    "PyYAML",
+    "jsonschema",
+    "scipy",
+    "numpy",
+    "rich",
+    "tiktoken",
+    # --- rag-specific ---
+    # Nothing is vendored: upstream's mem0 1.0.2 + Qdrant stack is replaced by
+    # the equivalent numpy cosine search in memo.py (see README.md), so only
+    # the faithful arm's LOCAL embedder needs anything beyond the core.
+    # all-MiniLM-L6-v2, via model_config.get_embedder. Capped below 6: every
+    # other baseline locks 5.6.1, the line model_config's embedder factory and
+    # core.local_models' constructor tracking were written against.
+    "sentence-transformers>=3.2.1,<6",
+    "torch==2.6.0",                   # sentence-transformers backend. Newest CUDA 12.4 build — see [tool.uv.sources]
+    "datasets",                       # HF datasets — sentence-transformers imports it eagerly
+]
+
+[tool.uv]
+package = false   # this dir is an app env, not a buildable package
+
+# torch comes from PyTorch's CUDA 12.4 index, not PyPI: PyPI's Linux torch
+# wheels now bundle CUDA 13, which needs NVIDIA driver >= 580. A CUDA 12.4 build
+# runs on drivers >= 550. 2.6.0 is the newest torch published for
+# cu124. `explicit` keeps every other package on PyPI.
+[tool.uv.sources]
+torch = { index = "pytorch-cu124" }
+
+[[tool.uv.index]]
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true

@@ -1,0 +1,19 @@
+[project]
+name = "mape-vllm"
+version = "0.1.0"
+description = "Serve a local backbone for MAPE evaluations with vLLM (OpenAI-compatible)."
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    # 0.8.5.post1 is the last line built against torch 2.6 / CUDA 12.4, which
+    # is what a 550.x driver (CUDA 12.4) can run; newer vLLM
+    # wheels need CUDA 12.8 drivers. Qwen3 is supported from 0.8.5.
+    "vllm==0.8.5.post1",
+    "torch==2.6.0",
+    # vLLM 0.8.5 predates transformers 5; uv would otherwise pick 5.x.
+    "transformers>=4.51.3,<4.56",
+    "huggingface_hub>=0.30",
+]
+
+[tool.uv]
+# torch cu124 wheels come from PyPI for 2.6.0 (the default build), so no
+# extra index is needed here.

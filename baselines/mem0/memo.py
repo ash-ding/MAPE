@@ -1,0 +1,263 @@
+"""Mem0 (https://github.com/mem0ai/mem0) as a retrieval MemoClass.
+
+BUILD: ingestion units are batched into ``Memory.add(messages, user_id=...)``,
+which is Mem0's actual contribution — an LLM reads each batch, EXTRACTS
+standalone facts from it, and then decides per fact whether to ADD it, UPDATE an
+existing one, or DELETE a contradicted one against what is already stored. The
+memory therefore holds distilled facts ("User adopted a rescue dog named Pico, a
+beagle mix"), not raw turns. Additive across BUILD calls.
+
+RETRIEVE: ``Memory.search(query, filters={"user_id": ...}, top_k=...)`` — vector
+search over those facts. Returned as ``{"passages": [...]}`` for the SHARED QA
+agent, which answers for every memo (answering is not part of the contract), so
+the comparison stays about the memory rather than each method's own answerer.
+
+ISOLATION: one Mem0 instance per user, each with its own on-disk Qdrant
+collection and its own history DB, so nothing leaks between conversations. The
+``user_id`` filter is redundant given that, and is passed anyway because Mem0's
+update/delete bookkeeping keys on it.
+
+Ingestion units (recorder.init dispatch):
+  locomo ("conversation"): one message per turn, speaker folded into the text
+    (Mem0 has no speaker field), time = session date_time.
+  longmemeval ("sessions"): one message per message, role preserved.
+"""
+from __future__ import annotations
+
+import asyncio
+import shutil
+import sys
+import uuid
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+from core.memo_class import MemoClass
+from baselines.concurrency import model_load_lock
+
+from core.openai_usage import install as _install_openai_usage
+from baselines.model_config import install_openai_param_normalisation
+
+# Mem0's OpenAI provider sends temperature + max_tokens on every extractor call,
+# which the gpt-5 family rejects. Installed before the mem0 import so the patch
+# is in place regardless of when mem0 builds its clients. No embedder factory:
+# mem0 is already on an API embedder (`embedder.provider: openai`).
+install_openai_param_normalisation()
+
+# `import mem0` must resolve to the byte-identical vendored copy under src/, not
+# to any pip-installed mem0ai (there is none in this baseline's env — mem0ai was
+# dropped from pyproject.toml when the source was vendored). Prepended, so the
+# vendored copy wins even if one is installed in an ambient env.
+# (zep pattern; no _st_shim.py needed — nothing here imports HF datasets.)
+_SRC = str(Path(__file__).resolve().parent / "src")
+if _SRC not in sys.path:
+    sys.path.insert(0, _SRC)
+
+# mem0 runs its LLM and its OpenAI embedder through the SDK from the
+# venv-installed package (until #23 vendors it); the SDK-boundary patch
+# captures both.
+_install_openai_usage()
+
+from mem0 import Memory  # noqa: E402
+import mem0.memory.main as _mem0_main  # noqa: E402
+import mem0.memory.telemetry as _mem0_telemetry  # noqa: E402
+from mem0.embeddings.openai import OpenAIEmbedding as _Mem0OpenAIEmbedding  # noqa: E402
+
+# Integration fix (src/ untouched): Memory.add() embeds the whole parsed add-batch
+# (add_batch_size messages joined) as its existing-memory search query
+# (main.py::_add_to_vector_store). LongMemEval haystacks hold long assistant turns,
+# so 46/400 test questions produce a batch over OpenAI's 8192-token embedding limit
+# and the API rejects it (400). Truncate embedding inputs the way core/llm.py's
+# own Embedding does; it only shortens that retrieval query vector.
+_EMBED_MAX_TOKENS = 7800          # margin under OpenAI's 8192
+
+
+def _truncate_for_embedding(text):
+    import tiktoken
+    if not isinstance(text, str):
+        return text
+    # embed() replaces "\n" with " " before sending; that changes the tokenization
+    # (a 9230-token batch truncated to 8000 came back over 8192), so apply the same
+    # transform first and count what is actually sent. Idempotent for embed().
+    text = text.replace("\n", " ")
+    enc = tiktoken.get_encoding("cl100k_base")          # text-embedding-3-*
+    ids = enc.encode(text, disallowed_special=())
+    if len(ids) <= _EMBED_MAX_TOKENS:
+        return text
+    from core.logger import get_logger
+    get_logger("main").warning(f"[mem0] embedding input truncated {len(ids)} -> {_EMBED_MAX_TOKENS} tokens")
+    return enc.decode(ids[:_EMBED_MAX_TOKENS])
+
+
+_orig_embed = _Mem0OpenAIEmbedding.embed
+_orig_embed_batch = _Mem0OpenAIEmbedding.embed_batch
+_Mem0OpenAIEmbedding.embed = lambda self, text, memory_action=None: _orig_embed(
+    self, _truncate_for_embedding(text), memory_action)
+_Mem0OpenAIEmbedding.embed_batch = lambda self, texts, memory_action="add": _orig_embed_batch(
+    self, [_truncate_for_embedding(t) for t in texts], memory_action)
+
+# Telemetry OFF, set explicitly on the modules rather than through the
+# MEM0_TELEMETRY env var. With it on, every Memory() additionally opens a
+# telemetry vector store at the process-global path ~/.mem0/migrations_qdrant;
+# local-mode Qdrant takes an exclusive lock on a storage folder, so the second
+# concurrent user in the same process dies with "already accessed by another
+# instance of Qdrant client" — which is what happens here, since the workflow
+# builds several users' memories concurrently. Off is also simply correct: a
+# benchmark run should not phone the evaluation home. Both names are needed:
+# main.py binds MEM0_TELEMETRY by value at import, while telemetry.py and
+# notices.py read the telemetry module's attribute at call time. (Importing
+# telemetry.py still constructs one idle PostHog client object; it sends
+# nothing, because every capture path checks the flag.)
+_mem0_main.MEM0_TELEMETRY = False
+_mem0_telemetry.MEM0_TELEMETRY = False
+
+OUTPUTS_DIR = Path(__file__).resolve().parent / "outputs"
+
+
+def _init_to_messages(init: Dict) -> List[Dict[str, str]]:
+    """recorder.init -> Mem0 chat messages."""
+    out: List[Dict[str, str]] = []
+
+    if init.get("conversation") is not None:
+        conv = init["conversation"]
+
+        def _session_no(key: str) -> int:
+            try:
+                return int(key.split("_")[1])
+            except (IndexError, ValueError):
+                return 0
+
+        for key in sorted((k for k in conv
+                           if k.startswith("session_") and not k.endswith("_date_time")),
+                          key=_session_no):
+            date = str(conv.get(f"{key}_date_time", ""))
+            for turn in (conv.get(key) or []):
+                if not isinstance(turn, dict):
+                    continue
+                text = str(turn.get("text", ""))
+                caption = str(turn.get("blip_caption") or "").strip()
+                if caption:
+                    text = f"{text} [shared image: {caption}]" if text else f"[shared image: {caption}]"
+                # Speaker and date go INTO the content: Mem0's extractor only
+                # sees role+content, so dropping them would make every
+                # "who said it / when" question unanswerable from memory.
+                out.append({"role": "user",
+                            "content": f"[{date}] {turn.get('speaker', '?')}: {text}"})
+        return out
+
+    if init.get("sessions") is not None:
+        for sess in init["sessions"]:
+            if not isinstance(sess, dict):
+                continue
+            date = str(sess.get("date", ""))
+            for msg in (sess.get("messages") or []):
+                if not isinstance(msg, dict):
+                    continue
+                role = str(msg.get("role", "user")).lower()
+                role = role if role in ("user", "assistant", "system") else "user"
+                out.append({"role": role, "content": f"[{date}] {msg.get('content', '')}"})
+        return out
+
+    return out
+
+
+# Method config, faithful arm — module-level DATA: eval_harness.py resolves it
+# (with `arm` / `unified_models` / `memo:`) and hands the result to the memo's
+# constructor; the class itself only reads self.config.
+CONFIG_DEFAULTS = {
+    # PAPER (arXiv 2504.19413) §2: "LLM-based extractors and update module
+    # leverage GPT-4o-mini with function calling". Reads each batch of
+    # messages, extracts standalone facts, and decides ADD / UPDATE / DELETE
+    # against what is already stored. This IS the method — not a summariser.
+    "mem0_llm_model": "gpt-4o-mini",
+    # PAPER §3.3 names text-embedding-3-small (written there as
+    # "text-embedding-small-3") across its evaluation stack; also Mem0's own
+    # library default. OpenAI provider, 1536-dim.
+    "embedding_model": "text-embedding-3-small",
+    "base_url": None,          # OpenAI-compatible base URL for the internal LLM; None = OpenAI
+    # Messages per Memory.add() extraction call. Mem0 reads a whole message
+    # list at once; batching is its intended usage and keeps the build to
+    # dozens of LLM calls rather than one per turn.
+    "add_batch_size": 20,
+    # True = LLM fact extraction (the method). False = store messages
+    # verbatim, which turns Mem0 into a plain vector store — ablation only.
+    "infer": True,
+    "top_k": 10,               # Memory.search hits per query. PAPER: s=10 (library default is 20)
+    "threshold": 0.0,          # min similarity for a hit (0 = keep all top_k; library default 0.1)
+}
+# `arm: unified` writes unified_models.llm / .embedding into these keys. Mem0's
+# faithful embedder is already an API model, so under the default
+# unified_models only the internal LLM actually changes. Mem0's OpenAI provider
+# sends temperature + max_tokens, which the gpt-5 family rejects — model_config
+# normalises both away at the SDK boundary, so no edit under src/.
+UNIFIED_MODEL_KEYS = {"llm": ("mem0_llm_model",), "embedding": ("embedding_model",)}
+
+
+class Mem0Memo(MemoClass):
+    def __init__(self, config=None):
+        super().__init__(config)
+        self._memory: Optional[Memory] = None
+        self._instance_id = uuid.uuid4().hex[:12]
+        self._user_id = f"u_{self._instance_id}"
+
+    def _ensure_system(self) -> None:
+        if self._memory is not None:
+            return
+        # One user at a time: construction loads local models (concurrency.model_load_lock).
+        with model_load_lock:
+            cfg = self.config
+            store = OUTPUTS_DIR / self._instance_id
+            if store.exists():
+                shutil.rmtree(store, ignore_errors=True)
+            store.mkdir(parents=True, exist_ok=True)
+            llm_conf: Dict[str, Any] = {"model": cfg["mem0_llm_model"]}
+            if cfg["base_url"]:
+                llm_conf["openai_base_url"] = cfg["base_url"]
+            self._memory = Memory.from_config({
+                # Embedded Qdrant on disk — per-user collection, no server process.
+                "vector_store": {"provider": "qdrant", "config": {
+                    "collection_name": f"c_{self._instance_id}",
+                    "path": str(store / "qdrant"),
+                    "on_disk": True,
+                }},
+                "llm": {"provider": "openai", "config": llm_conf},
+                "embedder": {"provider": "openai",
+                             "config": {"model": cfg["embedding_model"]}},
+                "history_db_path": str(store / "history.db"),
+            })
+
+    # Mem0's Memory API is synchronous (fact extraction LLM calls, embedding,
+    # Qdrant): each hook runs its body on a worker thread so other users keep
+    # going meanwhile (see baselines/concurrency.py).
+
+    async def build_memory_from_data(self, recorder) -> None:
+        await asyncio.to_thread(self._build, recorder)
+
+    async def retrieve_memory_for_query(self, recorder) -> Dict:
+        return await asyncio.to_thread(self._retrieve, recorder)
+
+    def _build(self, recorder) -> None:
+        self._ensure_system()
+        messages = _init_to_messages(recorder.init)
+        if not messages:
+            return
+        # Batched rather than one add() per turn: Mem0's extractor reads a whole
+        # message list at once, so batching is both its intended usage and the
+        # difference between a few dozen LLM calls and several hundred. The
+        # batch size is a knob because the extraction prompt has to fit.
+        size = max(1, int(self.config["add_batch_size"]))
+        for i in range(0, len(messages), size):
+            self._memory.add(messages[i:i + size], user_id=self._user_id,
+                             infer=bool(self.config["infer"]))
+
+    def _retrieve(self, recorder) -> Dict:
+        self._ensure_system()
+        query = str(recorder.init.get("query", ""))
+        res = self._memory.search(
+            query,
+            filters={"user_id": self._user_id},
+            top_k=int(self.config["top_k"]),
+            threshold=float(self.config["threshold"]),
+        )
+        results = res.get("results") if isinstance(res, dict) else res
+        passages = [str(r.get("memory", "")) for r in (results or []) if r.get("memory")]
+        return {"passages": passages} if passages else {}

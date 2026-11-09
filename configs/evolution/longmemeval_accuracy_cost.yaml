@@ -1,0 +1,58 @@
+adopt_orphans: true
+analyst:
+  effort: xhigh
+  enabled: true
+  include_seeds: true
+  model: claude-opus-4-8
+  timeout_s: 1800
+contract:
+  compose: true
+datasets:
+  longmemeval_s:
+    judge_model: gpt-5-mini
+    sanity_check:
+      n_questions: 2
+    size:
+      n_questions: null
+gpu:
+  enabled: true
+judge_model: gpt-5-mini
+llm:
+  routes:
+    qwen3-30b-a3b-instruct-2507:
+      api_key: EMPTY
+      base_urls:
+      - http://127.0.0.1:8300/v1
+      - http://127.0.0.1:8301/v1
+      - http://127.0.0.1:8302/v1
+max_sample_concurrent: 8
+metrics:
+- accuracy
+- efficiency
+model: qwen3-30b-a3b-instruct-2507
+propose:
+  k_per_step: 1
+proposer:
+  disallowed_tools:
+  - mcp__*
+  effort: xhigh
+  model: claude-opus-4-8
+  timeout_s: 2700
+run_name: lme_qwen_m
+sanity:
+  enabled: true
+  max_retries: 2
+seed:
+  arm: unified
+  enabled: true
+  sources:
+  - icl
+  - no_memory
+  unified_models:
+    embedding: text-embedding-3-small
+    llm: qwen3-30b-a3b-instruct-2507
+smoke_test: false
+steps: 20
+strict_config: true
+trace:
+  max_value_chars: 20000

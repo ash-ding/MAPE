@@ -1,0 +1,28 @@
+# =============================================================================
+# mem0 — the PAPER-REPRODUCTION run: the record of what produced the numbers in
+# this baseline's README. Frame keys only; the method itself runs at its
+# paper-faithful CONFIG_DEFAULTS (memo.py — print with `--describe mem0`).
+#
+#   uv run --project baselines/mem0 python -m baselines.eval_harness \
+#       --config baselines/mem0/config.paper.yaml
+# =============================================================================
+
+harness: mem0
+arm: faithful                  # the method's own published models
+unified_models: null
+
+dataset: locomo                # the paper reports on LoCoMo
+split: search
+sampling_seed: 42
+
+llm_model: gpt-4o-mini         # PAPER-ALIGNED answerer: the paper reports LoCoMo on gpt-4o-mini.
+                               # The repo-comparable arm uses gpt-5-mini (config.example.yaml).
+judge_model: gpt-5-mini        # LLM-as-judge model scoring predicted vs reference answers
+max_sample_concurrent: 3
+
+size:
+  n_conversations: null        # all 6 conversations in the search split
+  n_qa: 60                     # 60 randomly-sampled QA per conversation = 360 total.
+                               # 60 rather than 30 because open-domain is only 6% of LoCoMo:
+                               # at 30 it lands ~10 questions, far too few to read.
+run_name: null

@@ -1,0 +1,30 @@
+[project]
+name = "mape"
+version = "0.0.0"
+description = "MAPE: program evolution for agent memory systems"
+requires-python = ">=3.12"
+dependencies = [
+    # evolution orchestrator runtime
+    "python-dotenv>=1.0",
+    "PyYAML>=6.0",
+    # lightweight core.* deps (let the host import core/ + run the shared
+    # tests without a container; production heavy deps live in Singularity)
+    "openai>=1.107",
+    "httpx",
+    "jsonschema",
+    "tiktoken",
+    "scipy",            # core/llm.py::Embedding (cosine)
+    "rich",             # core/logger.py
+    "anthropic",
+]
+
+[tool.uv]
+package = false   # repo root is an app/env, not a buildable package
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+norecursedirs = ["baselines"]

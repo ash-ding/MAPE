@@ -1,0 +1,20 @@
+# Copy this example and edit model routes, run_name and dataset settings.
+# See docs/reproduction.md for preparation and execution commands.
+strict_config: true
+run_name: my_heldout
+harnesses:
+- workspace/paper/locomo_method/harness
+datasets:
+  locomo:
+    size:
+      n_conversations: null
+      n_qa: null
+model: gpt-4.1-mini
+judge_model: gpt-5-mini
+llm:
+  routes: {}
+max_sample_concurrent: 3
+trace:
+  max_value_chars: 20000
+gpu:
+  enabled: false

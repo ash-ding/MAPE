@@ -1,0 +1,17 @@
+MAPE
+Copyright 2026 The MAPE Authors
+
+This product includes software developed by third parties. The directories
+listed below contain source code copied from the named upstream repositories
+at the recorded revisions. Each copy keeps its original license, included as
+the LICENSE file inside that directory; the Apache License 2.0 at the root of
+this repository covers only the project-owned code.
+
+  baselines/amem/src/   A-Mem (https://github.com/WujiangXu/A-mem, 0c8039f28fdc)   MIT
+  baselines/lightmem/src/   LightMem (https://github.com/zjunlp/LightMem, 34410f41173f)   MIT
+  baselines/simplemem/src/   SimpleMem (https://github.com/aiming-lab/SimpleMem, db80b6a7c591)   MIT
+  baselines/mem0/src/   Mem0 (https://github.com/mem0ai/mem0, 12c47f524935)   Apache-2.0
+  baselines/zep/src/   Zep / Graphiti (https://github.com/getzep/graphiti, 4f62cfe7a2d5)   Apache-2.0
+
+Benchmark data are downloaded separately by scripts/fetch_data.py and remain
+under the terms of their original releases (LoCoMo; LongMemEval).

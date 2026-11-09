@@ -1,0 +1,209 @@
+# SimpleMem baseline
+
+[SimpleMem](https://github.com/aiming-lab/SimpleMem) — semantic-compression
+lifelong memory — as a ready-made memory system on the 2-hook `MemoClass`
+contract. Paper: [arXiv 2601.02553](https://arxiv.org/abs/2601.02553).
+
+**Provenance**: the `src/simplemem/` subtree is vendored from
+<https://github.com/aiming-lab/SimpleMem> @
+`db80b6a7c591e0ea730a058e9f5fc4eb06572299`. Only the **text** pipeline is
+vendored — `simplemem/text/` + `simplemem/core/` — which is byte-identical to
+upstream; the heavy `multimodal/`, `evolver/`, and `integrations/` subtrees are
+NOT vendored (this baseline evaluates SimpleMem's text memory only). Verify the
+core+text files are unmodified:
+
+    UP=$(mktemp -d) && git clone https://github.com/aiming-lab/SimpleMem "$UP" \
+      && git -C "$UP" checkout db80b6a
+    diff -r "$UP/simplemem/core" src/simplemem/core && echo "core: identical"
+    diff -r "$UP/simplemem/text" src/simplemem/text && echo "text: identical"
+
+The one vendored file that is **not** byte-identical is
+`src/simplemem/__init__.py` — upstream's package initializer eagerly imports
+the AutoMemory router (→ multimodal / evolver), so it is replaced with a minimal
+initializer that imports nothing (the baseline imports
+`simplemem.text.system.SimpleMemSystem` directly). All integration code lives in
+`memo.py`, never in `src/`.
+
+## How it works
+
+SimpleMem's three-stage text pipeline runs untouched:
+
+1. **Semantic structured compression** — BUILD windows the ingested `Dialogue`s
+   (`window_size: 20`, the paper's W — the vendored code ships 40; overlap 2)
+   and an LLM distills each window into
+   self-contained `MemoryEntry` units: a coreference-resolved "lossless
+   restatement" with absolute timestamps, plus keywords and
+   persons/entities/location/topic metadata.
+2. **Online semantic synthesis** — intra-session consolidation during the write
+   path (redundancy removed at ingestion, not retrieval).
+3. **Intent-aware retrieval planning** — RETRIEVE runs
+   `HybridRetriever.retrieve(query)`: multi-query planning + a three-view search
+   (semantic vector / keyword / structured-metadata) over a per-user LanceDB
+   index, with optional reflection rounds.
+
+Retrieved memory units are returned as `{"passages": [...]}` and the **shared QA
+agent answers** — as it does for every memo, answering being no hook. This keeps the comparison about *memory* (SimpleMem's compression +
+retrieval), not about SimpleMem's own `answer_generator`.
+
+## Setup
+
+simplemem has its own uv-managed venv, built from its own self-contained
+`pyproject.toml` (lancedb, pyarrow, tantivy, dateparser,
+sentence-transformers, transformers, torch):
+
+    cd baselines/simplemem && uv sync
+
+This creates `baselines/simplemem/.venv/`. The repo-root
+`.venv/` is dev/test only and cannot run simplemem.
+
+## Usage
+
+    uv run --project baselines/simplemem python -m baselines.eval_harness \
+        --config baselines/config.example.yaml      # harness: simplemem
+
+All seven harness baselines share ONE entrypoint
+([`../eval_harness.py`](../eval_harness.py)) and ONE frame config
+([`../config.example.yaml`](../config.example.yaml)): set `harness: simplemem`,
+choose `arm`, dataset/split/sizing and the shared QA + judge models, and point
+`--config` at your copy. The YAML must list EXACTLY the frame keys — a missing
+key OR an unknown key aborts the run before anything executes; a `null` value
+counts as listed. `--project` is not optional: this baseline's deps live only
+in its own venv.
+
+**Method knobs are not in the config file.** Every simplemem-specific parameter is
+declared once, with its justification, in `CONFIG_DEFAULTS` at the top of
+[`memo.py`](memo.py) (the faithful arm); `UNIFIED_MODEL_KEYS` names the keys
+`arm: unified` writes `unified_models` into. Print them:
+
+    uv run --project baselines/simplemem python -m baselines.eval_harness --describe simplemem
+
+Every run keeps its config as `runs/<run_id>/config.yaml` (copy it to re-run) and
+the fully resolved values in `runs/<run_id>/memo_config.resolved.yaml`.
+To override one for an ablation, add a `memo:` block to your config
+(`memo: {retrieve_k: 5}`) — validated against `CONFIG_DEFAULTS`, so a typo aborts;
+model keys can't be set there (use `arm` / `unified_models`).
+
+SimpleMem-specific keys worth calling out: `simplemem_llm_model` (default
+`gpt-4.1-mini` — SimpleMem's own default. Its `LLMClient` sends
+`temperature=0.1..0.3`, which the gpt-5 family rejects, but `model_config`
+normalises that away at the SDK boundary, so a gpt-5 model IS runnable);
+`embedding_model` (default `Qwen/Qwen3-Embedding-0.6B`, the faithful local
+sentence-transformer; set `all-MiniLM-L6-v2` for the light fallback). The
+rest (`base_url`, `window_size`, `overlap_size`, `semantic_top_k`,
+`keyword_top_k`, `structured_top_k`, `enable_planning`, `enable_reflection`,
+`max_reflection_rounds`, `enable_parallel_processing`,
+`max_parallel_workers`, `enable_parallel_retrieval`,
+`max_retrieval_workers`, `llm_model`, `judge_model`, `size`,
+`sampling_seed`) are documented inline in
+`../config.example.yaml`.
+
+**Sizing is config-file only** (there is no sizing CLI surface either):
+the REQUIRED `size` block. See `../config.example.yaml`.
+
+## Ingestion mapping (`recorder.init` → `Dialogue`)
+
+| Benchmark | init key | one `Dialogue` per… | speaker / content / time |
+|---|---|---|---|
+| locomo | `conversation` | conversation turn | `speaker` / `text` / session `date_time` (native SimpleMem format) |
+| longmemeval_s | `sessions` | message | `role` / `content` / session `date` |
+
+`Dialogue` ids are per-instance sequential and continue across BUILD calls
+(each BUILD windows only the new data; `finalize` flushes its remainder).
+
+## Model configuration (two arms)
+
+Every model this baseline touches is a config parameter, so it runs in two arms:
+
+| | faithful arm (`arm: faithful` — `CONFIG_DEFAULTS`) | unified arm (`arm: unified` — example `unified_models`) |
+|---|---|---|
+| internal LLM (`simplemem_llm_model`) | `gpt-4.1-mini` — the paper's backbone (§3.1/§3.3) | `gpt-4.1-mini` |
+| embedder (`embedding_model`) | `Qwen/Qwen3-Embedding-0.6B`, local, 1024-dim — the paper's (§3.1) | `text-embedding-3-small`, API, 1536-dim |
+
+**The faithful arm is the default**, and it is what the faithfulness table
+below and every number in this README describe. The unified arm puts all seven
+baselines on one LLM and one embedder so the comparison against the main method
+is like-for-like — it is a deliberate deviation from the paper, and its numbers
+must not be quoted as SimpleMem's published result.
+
+Both arms leave `src/` **byte-identical** — the `diff -r` above still passes.
+Two boundary levers in [`../model_config.py`](../model_config.py) make that
+possible:
+
+- **the embedder.** `EmbeddingModel.__init__` dispatches on
+  `model_name.startswith("qwen3")` and builds its own SentenceTransformer, with
+  no injection point, so the shared factory patches that constructor. It
+  memoizes local weights across users (a fresh MemoClass is built per user, and
+  the Qwen3 weights are ~0.6B) and returns an API-backed `.encode()`-compatible
+  adapter for a `text-embedding-*` name. The configured value reaches SimpleMem
+  through its `EMBEDDING_MODEL` env setting, so the name the vendored code
+  requests IS the configured one and the factory dispatches on it directly.
+- **the LLM.** SimpleMem's `LLMClient` sends `temperature=0.1..0.3`, which the
+  gpt-5 family rejects — so before this, SimpleMem could not run a gpt-5 model
+  at all. The shim drops the rejected params and renames `max_tokens` →
+  `max_completion_tokens` at the OpenAI-SDK boundary.
+
+No dimension knob has to move with the embedder: SimpleMem sizes its LanceDB
+table from `embedding_model.dimension`. The per-user store is rebuilt with
+`clear_db=True`, so switching arms needs no manual cleanup.
+
+## Faithfulness boundary
+
+| Category | Items |
+|---|---|
+| Verbatim | whole `src/simplemem/{core,text}` (compression, hybrid retrieval, planning, reflection, answer prompts, LanceDB backend); `OVERLAP_SIZE=2`; `SEMANTIC/KEYWORD/STRUCTURED_TOP_K=25/5/5`; internal LLM `gpt-4.1-mini` (paper §3.1/§3.3); `Qwen/Qwen3-Embedding-0.6B` embedder (paper §3.1, 1024-dim) |
+| Paper over code | `window_size: 20` — the paper (§3.1) states "a sliding window of size W = 20" while the vendored code ships `WINDOW_SIZE=40`. The paper's value is the default. **Numbers collected at 40 are not comparable to numbers collected at 20.** |
+| Integration adaptations (not algorithm) | longmemeval (per message) ingestion mapping — SimpleMem only defined LoCoMo; answering via the shared QA agent; the shared embedder factory from [`../model_config.py`](../model_config.py) (see **Model configuration** above — a process-wide cache so the 0.6B weights load once, not per user, and the seam the API-embedder arm is injected through); the vendored chain imported exactly once at `memo.py` module scope, avoiding a pyarrow re-registration crash; `src/simplemem/__init__.py` trimmed to keep multimodal/evolver off the import path; `use_streaming=false` (identical output, no console flood) |
+| Kept at SimpleMem defaults (faithful path) | `enable_parallel_processing`/`enable_parallel_retrieval=true` (SimpleMem's shipped defaults, and the path its LoCoMo eval uses) — NOTE the serial and parallel build paths are **not** equivalent: the serial path feeds each window the previous window's entries as dedup context, the parallel path processes windows independently, so the parallel output is the faithful one. It is the build parallelism inside one user; users themselves overlap up to `max_sample_concurrent` (hooks run on worker threads), so in-flight compression calls multiply to `max_sample_concurrent` × `max_parallel_workers`. Tune via `max_parallel_workers` (16) / `max_retrieval_workers` (8) |
+| Known consequences | LoCoMo is SimpleMem's home benchmark and its tuned `WINDOW_SIZE` — other datasets use the same size unless overridden |
+
+## Cost / performance profile
+
+- **Build** dominates: 1 `gpt-4.1-mini` compression call per ~`WINDOW_SIZE`
+  dialogues (with overlap), plus a local embedding pass. **Retrieve** adds
+  planning + (optional) reflection `gpt-4.1-mini` calls per query, then the
+  shared `gpt-5-mini` QA + `gpt-5-mini` judge.
+- SimpleMem's internal `gpt-4.1-mini` calls **are** tracked: `memo.py` installs
+  `core.openai_usage`, which captures its vendored `llm_client.py` calls at
+  the SDK boundary (no edit under `src/`, so byte-identity holds). Window
+  compression lands under the `build` phase; planning/reflection under
+  `retrieve`.
+- The faithful embedder (`Qwen/Qwen3-Embedding-0.6B`) is a ~0.6B local model:
+  it benefits from a GPU and downloads once from HuggingFace. The shared
+  embedder factory in [`../model_config.py`](../model_config.py) loads it once
+  per process and shares it across users. It is **not** an API call, so its
+  compute can never appear in any token count — `run_record.json` names it with
+  its device, and `phase_seconds` is the only figure that covers it.
+- SimpleMem is synchronous, so each hook runs it on a worker thread and up to
+  `max_sample_concurrent` users overlap; the shared embedder encodes one call at
+  a time (see `baselines/concurrency.py`). Inside one user, the build
+  speedup is SimpleMem's own window parallelism
+  (`enable_parallel_processing`, `max_parallel_workers`, default 16), which
+  runs the per-window compression LLM calls concurrently; retrieval parallelism
+  is `max_retrieval_workers` (default 8). Up to `max_sample_concurrent` ×
+  `max_parallel_workers` compression calls can be in flight at once — keep that
+  product within your OpenAI rate limits.
+
+## Smoke test
+
+This baseline needs its own uv environment, a GPU for the Qwen3 embedder and
+an OpenAI key. To smoke each ingestion branch cheaply on the search split:
+
+Smoke configs are LOCAL scratch files — `.gitignore` keeps
+`baselines/simplemem/smoke_*.yaml` out of the repo (same as lightmem and
+zep), so create them yourself. Each is a full copy of `../config.example.yaml`
+with `harness: simplemem` and only `dataset` / `split` / `size` changed;
+exact config is unconditional, so a partial override file will abort before running.
+
+    # locomo (conversation branch) — 1 conv, 3 QAs
+    #   smoke_locomo.yaml: dataset: locomo, split: search,
+    #   size: {n_conversations: 1, n_qa: 3}
+    uv run --project baselines/simplemem python -m baselines.eval_harness --config smoke_locomo.yaml
+
+    # longmemeval_s (sessions branch) — 1 question
+    #   smoke_lme.yaml: dataset: longmemeval_s, split: search,
+    #   size: {n_questions: 1}
+    uv run --project baselines/simplemem python -m baselines.eval_harness --config smoke_lme.yaml
+
+Read `runs/<run_id>/traces/<user>.json` to confirm build → retrieve
+→ QA runs, `invalid_users` is empty, and the retrieved `passages` are non-empty
+compressed memory units in the expected format.

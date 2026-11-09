@@ -1,0 +1,60 @@
+# =============================================================================
+# Harness-baseline evaluation — the ONE config, identical for the released
+# baselines (icl, rag, amem, lightmem, mem0, simplemem, zep, no_memory).
+# Launch from the repo root inside the TARGET baseline's own uv project:
+#
+#   uv run --project baselines/<harness> python -m baselines.eval_harness \
+#       --config baselines/config.example.yaml
+#
+# This file is the EVALUATION FRAME. Every method-specific knob (retrieval k,
+# internal LLM, embedder, capacities, …) defaults to `CONFIG_DEFAULTS` in
+# baselines/<harness>/memo.py (the paper / upstream value, justified
+# next to each entry). Print them, and which keys `arm: unified` sets, with
+#   ... eval_harness --describe <harness>
+# Every run keeps a copy of this file (runs/<run_id>/config.yaml — edit and
+# re-run it) and the fully resolved method config (memo_config.resolved.yaml).
+#
+# Everything is explicit: no setting is read from the environment (API keys
+# are the one exception), and a run refuses to start if an environment
+# variable would silently change it.
+#
+# EXACT CONFIG (always on): the YAML must list EVERY key below — and ONLY those
+# keys (a null value counts as listed; `run_name` and `memo` are optional). A
+# missing or unknown key aborts the run, naming the problem; sizing (`size`)
+# is checked to the leaf.
+# =============================================================================
+
+harness: mem0                  # which memory system: icl | rag | amem | lightmem | mem0 | simplemem | zep | no_memory
+arm: faithful                  # faithful = each method's own published models (CONFIG_DEFAULTS as-is)
+                               # unified  = the models below, in every baseline, so the comparison
+                               #            against the main method is like-for-like. Only the models
+                               #            change: method hyper-parameters stay each method's own.
+unified_models: null           # read only under `arm: unified` (must be null for faithful):
+# unified_models:
+#   llm: gpt-4.1-mini                   # each baseline's INTERNAL LLM (extraction, summaries, graph building)
+#   embedding: text-embedding-3-small   # each baseline's embedder — must be an API model (text-embedding-*)
+
+dataset: locomo                # which benchmark: locomo | longmemeval_s
+split: search                  # test | search (search = the training split used during evolution)
+sampling_seed: 42              # seeds the sampled subset (a no-op at whole-split)
+
+# --- Shared eval knobs (the layer that makes scores comparable: the answerer
+#     and the judge are the same for every baseline) ---
+llm_model: gpt-4.1-mini        # shared QA agent — answers from the baseline's retrieved memory
+judge_model: gpt-5-mini        # LLM-as-judge model scoring predicted vs reference answers
+max_sample_concurrent: 3       # asyncio concurrency across users/samples (higher = faster, more API load)
+
+# --- Sizing (config-file only). Every leaf field must be listed (a null
+#     leaf = whole split for that dimension). ---
+size:                          # locomo native fields; longmemeval_s uses {n_questions: ...}
+  n_conversations: null        # null = all conversations in the split; e.g. 2 to cap
+  n_qa: null                   # null = all QA per conversation
+
+run_name: null                 # optional run directory name; null = <YYYYMMDD_HHMMSS>_<dataset>_<split>
+routes: null                   # optional: locally served models by name — the Qwen backbone. Same table as the evolution loop's
+                               # llm.routes (scripts/vllm/serve.sh prints it), e.g.
+                               #   routes: {qwen3-30b-a3b-instruct-2507: {base_urls: ["http://127.0.0.1:8300/v1"], api_key: EMPTY}}
+                               # with unified_models.llm AND llm_model set to that name.
+# memo:                        # optional: override method hyper-parameters, e.g. {retrieve_k: 10}.
+#                              # Validated against CONFIG_DEFAULTS (a typo aborts). It cannot set a
+#                              # model key — models change only through arm / unified_models.
