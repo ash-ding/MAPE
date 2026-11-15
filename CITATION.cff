@@ -19,3 +19,28 @@ authors:
     given-names: Rui
   - family-names: Liu
     given-names: Zirui
+repository-code: "https://github.com/ash-ding/MAPE"
+preferred-citation:
+  type: article
+  title: "Discovering Effective Agent Memory Designs through Program Evolution"
+  authors:
+    - family-names: Ding
+      given-names: Xinheng
+    - family-names: Cheshmi
+      given-names: Seyyed Saeid
+    - family-names: Zhang
+      given-names: Ziyang
+    - family-names: Chen
+      given-names: Tairan
+    - family-names: Xie
+      given-names: Wenya
+    - family-names: Hou
+      given-names: Yu
+    - family-names: Zhang
+      given-names: Rui
+    - family-names: Liu
+      given-names: Zirui
+  year: 2026
+  journal: "arXiv preprint arXiv:2611.17068"
+  doi: "10.48550/arXiv.2611.17068"
+  url: "https://arxiv.org/abs/2611.17068"
