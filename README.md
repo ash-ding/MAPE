@@ -188,14 +188,7 @@ docs/           reproduction guide and third-party provenance
 
 ## Citation
 
-```bibtex
-@article{mape2026,
-  title   = {Discovering Effective Agent Memory Designs through Program Evolution},
-  author  = {Ding, Xinheng and Cheshmi, Seyyed Saeid and Zhang, Ziyang and Chen, Tairan
-             and Xie, Wenya and Hou, Yu and Zhang, Rui and Liu, Zirui},
-  year    = {2026},
-}
-```
+Citation information will be added once the paper is publicly available.
 
 ## License
 
